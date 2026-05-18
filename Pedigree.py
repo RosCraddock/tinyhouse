@@ -98,6 +98,8 @@ class Individual(object):
         self.MetaFounder = [MetaFounder] if MetaFounder is not None else None
 
         self.phenotype = None
+        self.indPhenoPenetrance = None
+        self.age = None 
     
     def __eq__(self, other):
         return self is other
@@ -255,7 +257,9 @@ class Pedigree(object):
         self.AAP = {}
 
         self.phenoPenetrance = None
+        self.estPhenoPenetrance = None
         self.nPheno = 0
+        self.weibullParams = np.array([0.1, 0.2, 1.5, 0.1], dtype = np.float32)
 
         # remove?
         self.maf=None #Maf is the frequency of 2s.
@@ -895,11 +899,20 @@ class Pedigree(object):
 
         for value in data_list:
             idx, pheno = value
-
-            # Allows the input of multiple different phenotype traits.
-            nPheno = len(pheno)
+            age = None
+            
+            if len(pheno) == 2:
+                pheno, age = pheno
+            elif len(pheno) > 2:
+                print(f"ERROR: Too many columns in phenotype file for individual {idx}. \nExiting...")
+                sys.exit(2)
+            elif len(pheno) == 0:
+                print(f"ERROR: No phenotype value provided for individual {idx} in phenotype file. \nExiting...")
+                sys.exit(2)
+            # Only allow one phenotype to one single locus
+            nPheno = 1
             if self.nPheno == 0:
-                self.nPheno = nPheno
+                self.nPheno = 1
             if self.nPheno != nPheno:
                 print(f"ERROR: inconsistent number of phenotypes when reading in phenotype file. Expected {self.nPheno} got {nPheno}.\nExiting...")
                 sys.exit(2)
@@ -910,10 +923,95 @@ class Pedigree(object):
             ind = self.individuals[idx]
             
             # List to store repeated phenotype records for the same trait.
-            if ind.phenotype == None:
+            if ind.phenotype is None:
                 ind.phenotype = []
+            if age is not None:
+                if ind.age is None:
+                    ind.age = [0]*len(ind.phenotype)
+                elif not isinstance(ind.age, list):
+                    ind.age = [ind.age]
+                ind.age.append(age)
+            elif isinstance(ind.age, list):
+                ind.age.append(0)
             ind.phenotype.append(np.full(self.nPheno, pheno, dtype = np.int8))
 
+    def readInIndPhenoPen(self, fileName):
+        """
+        function for reading in individual phenotype penetrance probabilities.
+
+        Each individual must appear on exactly 4 consecutive rows, one per
+        phased genotype state (00, 01, 10, 11). Each row has the individual
+        id followed by the penetrance probability for each phenotype state
+        (e.g. 2 columns for a binary phenotype). The resulting (4, nPhenoStates)
+        matrix is appended to ind.indPhenoPenetrance in read order. If an
+        individual appears multiple times (multiple blocks of 4 rows), each
+        block is stored as a separate matrix.
+
+        :param fileName: the file path
+        :type fileName: str
+        """
+        print("Reading in individual phenotype penetrance:", fileName)
+
+        data_list = MultiThreadIO.readLines(fileName, startsnp=None, stopsnp=None, dtype=np.float32)
+
+        # check_line is not used here because it validates against self.nLoci,
+        # which is inappropriate for a phenotype penetrance file whose columns are phenotype
+        # states rather than marker loci.
+        # Seed nPhenoStates from phenotype data already read in, if available.
+        # Phenotypes are coded from 0, so the number of states = max observed phenotype + 1.
+        all_pheno = [record for ind in self.individuals.values()
+                     if ind.phenotype is not None
+                     for record in ind.phenotype]
+        nPhenoStates = int(np.max(all_pheno)) + 1 if all_pheno else None
+        nGenoStates = 4       # rows per individual: phased genotype states 00, 01, 10, 11
+        e = 0
+        currentInd = None
+        currentIndPen = None
+        nPhenoPen = np.atleast_2d(self.phenoPenetrance).shape[1] if self.phenoPenetrance is not None else None
+
+        for value in data_list:
+            idx, pen = value
+
+            # Validate and fix the column count on the first row seen
+            if nPhenoStates is None:
+                nPhenoStates = len(pen)
+            if nPhenoStates != len(pen):
+                if nPhenoPen != len(pen):
+                        print(f"ERROR: inconsistent number of columns in {fileName}. "
+                            f"Expected {nPhenoStates} values but got {len(pen)} for individual {idx}.\nExiting...")
+                        sys.exit(2)
+                else:
+                    nPhenoStates = nPhenoPen
+
+            # Rows 2-4 of each group of 4 must carry the same individual id
+            if e > 0 and idx != currentInd.idx:
+                print(f"ERROR: Expected individual {currentInd.idx} but got individual {idx} in {fileName}. "
+                      f"Each individual must have exactly {nGenoStates} consecutive rows.\nExiting...")
+                sys.exit(2)
+
+            # On the first row of a new individual, look up or create it and
+            # initialise the penetrance matrix
+            if e == 0:
+                if idx not in self.individuals:
+                    self.individuals[idx] = self.constructor(idx, self.maxIdn)
+                    self.maxIdn += 1
+                currentInd = self.individuals[idx]
+                if currentInd.indPhenoPenetrance is None:
+                    currentInd.indPhenoPenetrance = []
+                elif not isinstance(currentInd.indPhenoPenetrance, list):
+                    currentInd.indPhenoPenetrance = [currentInd.indPhenoPenetrance]
+
+                currentIndPen = np.full((nGenoStates, nPhenoStates), np.nan, dtype=np.float32)
+                currentInd.indPhenoPenetrance.append(currentIndPen)
+
+            currentIndPen[e] = pen
+            e = (e + 1) % nGenoStates
+
+        # Guard against a file that ends part-way through an individual's group
+        if e != 0:
+            print(f"ERROR: individual {currentInd.idx} in {fileName} has only {e} "
+                  f"row(s) instead of {nGenoStates}.\nExiting...")
+            sys.exit(2)
 
     def readInPhenotypePenetrance(self, fileName):
         """

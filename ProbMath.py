@@ -301,12 +301,33 @@ def generateErrorMat(error):
 
 def updateGenoProbsFromPhenotype(geno_probs, phenotypes, phenoPenetrance):
     vals = geno_probs
+
+    # Supports either:
+    # - a single (4, nState) penetrance matrix
+    # - a list of matrices, one per repeated phenotype record (same order)
+    pen_list = isinstance(phenoPenetrance, list)
+    if pen_list:
+        n_pen = len(phenoPenetrance)
+        if n_pen == 0:
+            raise ValueError("indPhenoPenetrance is an empty list.")
+        if n_pen != 1 and n_pen != len(phenotypes):
+            raise ValueError(
+                f"Mismatch between number of phenotype records ({len(phenotypes)}) and "
+                f"individual penetrance matrices ({n_pen})."
+            )
+
     # Where there are repeated phenotype records, continue to multiply the penetrance as assumed independent.
     repPhenotypes = len(phenotypes)
     reps = 0
     while reps < repPhenotypes:
         pheno = phenotypes[reps]
-        vals = vals*phenoPenetrance[:,pheno].reshape(-1,1)
+
+        if pen_list:
+            matrix = phenoPenetrance[0] if n_pen == 1 else phenoPenetrance[reps]
+        else:
+            matrix = phenoPenetrance
+
+        vals = vals*matrix[:,pheno].reshape(-1,1)
         reps += 1
     
     vals = vals/np.sum(vals, 0)

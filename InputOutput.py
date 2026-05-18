@@ -240,6 +240,11 @@ def readInPedigreeFromInputs(pedigree, args, genotypes=True, haps=False, reads=F
         for pheno in args.phenotype:
             pedigree.readInPhenotype(pheno)
 
+    indPhenoPenetrance= getattr(args, "ind_pheno_penetrance_prob_file", None)
+    if indPhenoPenetrance is not None:
+        for indPhenoPen in args.ind_pheno_penetrance_prob_file:
+            pedigree.readInIndPhenoPen(indPhenoPen)
+
     reference = getattr(args, "reference", None)    
     if reference is not None: 
         for ref in args.reference:
